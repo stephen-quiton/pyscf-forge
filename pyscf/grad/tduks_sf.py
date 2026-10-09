@@ -29,6 +29,19 @@ from pyscf.grad import tdrhf as tdrhf_grad
 from pyscf.grad import tdrks as tdrks_grad
 from pyscf.grad import tduks as tduks_grad
 from pyscf.sftda.numint2c_sftd import mcfun_eval_xc_adapter_sf
+from pyscf.nac.gradient_nac_cache import get_cache_manager
+
+
+def _cached_get_jk(cache_mgr, target, mol, dm, **kwargs):
+    return cache_mgr.cached_jk_call(target, 'get_jk', dm, kwargs, lambda: target.get_jk(mol, dm, **kwargs))
+
+
+def _cached_get_j(cache_mgr, target, mol, dm, **kwargs):
+    return cache_mgr.cached_jk_call(target, 'get_j', dm, kwargs, lambda: target.get_j(mol, dm, **kwargs))
+
+
+def _cached_get_k(cache_mgr, target, mol, dm, **kwargs):
+    return cache_mgr.cached_jk_call(target, 'get_k', dm, kwargs, lambda: target.get_k(mol, dm, **kwargs))
 
 
 def grad_elec(td_grad, x_y, atmlst=None, max_memory=2000, verbose=logger.INFO):
@@ -47,6 +60,7 @@ def grad_elec(td_grad, x_y, atmlst=None, max_memory=2000, verbose=logger.INFO):
 
     mol = td_grad.mol
     mf = td_grad.base._scf
+    cache_mgr = get_cache_manager(td_grad)
 
     mo_coeff = mf.mo_coeff
     mo_energy = mf.mo_energy
@@ -98,12 +112,12 @@ def grad_elec(td_grad, x_y, atmlst=None, max_memory=2000, verbose=logger.INFO):
 
     with_k = ni.libxc.is_hybrid_xc(mf.xc)
     if with_k:
-        vj0, vk0 = mf.get_jk(mol, (dmzooa, dmzoob), hermi=1)  # (2, nao, nao)
-        vk1 = mf.get_k(mol, dmt, hermi=0) * hyb  # (nao, nao)
+        vj0, vk0 = _cached_get_jk(cache_mgr, mf, mol, (dmzooa, dmzoob), hermi=1)
+        vk1 = _cached_get_k(cache_mgr, mf, mol, dmt, hermi=0) * hyb
         vk0 = vk0 * hyb
         if omega != 0:
-            vk0 += mf.get_k(mol, (dmzooa, dmzoob), hermi=1, omega=omega) * (alpha - hyb)
-            vk1 += mf.get_k(mol, dmt, hermi=0, omega=omega) * (alpha - hyb)
+            vk0 += _cached_get_k(cache_mgr, mf, mol, (dmzooa, dmzoob), hermi=1, omega=omega) * (alpha - hyb)
+            vk1 += _cached_get_k(cache_mgr, mf, mol, dmt, hermi=0, omega=omega) * (alpha - hyb)
 
         veff0doo = vj0[0] + vj0[1] - vk0 + f1oo[:, 0] + k1ao[:, 0]
         wvoa = reduce(np.dot, (orbva.T, veff0doo[0], orboa))
@@ -116,7 +130,7 @@ def grad_elec(td_grad, x_y, atmlst=None, max_memory=2000, verbose=logger.INFO):
         wvob -= lib.einsum('jk,jc->ck', veff0mo.T[:nocca, :noccb], x)
 
     else:
-        vj0 = mf.get_j(mol, (dmzooa, dmzoob), hermi=1)  # (2, nao, nao)
+        vj0 = _cached_get_j(cache_mgr, mf, mol, (dmzooa, dmzoob), hermi=1)
         veff0doo = vj0[0] + vj0[1] + f1oo[:, 0] + k1ao[:, 0]
         wvoa = reduce(np.dot, (orbva.T, veff0doo[0], orboa))
         wvob = reduce(np.dot, (orbvb.T, veff0doo[1], orbob))
@@ -193,17 +207,19 @@ def grad_elec(td_grad, x_y, atmlst=None, max_memory=2000, verbose=logger.INFO):
 
     if with_k:
         dm = (oo0a, dmz1dooa + dmz1dooa.T, oo0b, dmz1doob + dmz1doob.T)
-        vj, vk = td_grad.get_jk(mol, dm, hermi=1)
+        vj, vk = _cached_get_jk(cache_mgr, td_grad, mol, dm, hermi=1)
         vj = vj.reshape(2, 2, 3, nao, nao)
         vk = vk.reshape(2, 2, 3, nao, nao) * hyb
-        vk1 = -td_grad.get_k(mol, (dmt, dmt.T)) * hyb
+        vk1 = -_cached_get_k(cache_mgr, td_grad, mol, (dmt, dmt.T)) * hyb
         if omega != 0:
-            vk += td_grad.get_k(mol, dm, omega=omega).reshape(2, 2, 3, nao, nao) * (alpha - hyb)
-            vk1 += -td_grad.get_k(mol, (dmt, dmt.T), omega=omega) * (alpha - hyb)
+            vk += _cached_get_k(cache_mgr, td_grad, mol, dm, omega=omega).reshape(2, 2, 3, nao, nao) * (
+                alpha - hyb
+            )
+            vk1 += -_cached_get_k(cache_mgr, td_grad, mol, (dmt, dmt.T), omega=omega) * (alpha - hyb)
         veff1 = vj[0] + vj[1] - vk
     else:
         dm = (oo0a, dmz1dooa + dmz1dooa.T, oo0b, dmz1doob + dmz1doob.T)
-        vj = td_grad.get_j(mol, dm, hermi=1).reshape(2, 2, 3, nao, nao)
+        vj = _cached_get_j(cache_mgr, td_grad, mol, dm, hermi=1).reshape(2, 2, 3, nao, nao)
         veff1 = vj[0] + vj[1]
         veff1 = np.stack((veff1, veff1))
 
@@ -261,7 +277,6 @@ def _contract_xc_kernel(td_grad, xc_code, dmvo, dmoo=None, with_vxc=True, with_k
     xctype = ni._xc_type(xc_code)
 
     mo_coeff = mf.mo_coeff
-    mo_occ = mf.mo_occ
     nao = mo_coeff[0].shape[0]
     shls_slice = (0, mol.nbas)
     ao_loc = mol.ao_loc_nr()
@@ -284,13 +299,6 @@ def _contract_xc_kernel(td_grad, xc_code, dmvo, dmoo=None, with_vxc=True, with_k
     else:
         k1ao = None
 
-    if td_grad.base.collinear_samples > 0:
-        # create a mc object to use mcfun.
-        nimc = numint2c.NumInt2C()
-        nimc.collinear = 'mcol'
-        nimc.collinear_samples = td_grad.base.collinear_samples
-        eval_xc_eff = mcfun_eval_xc_adapter_sf(nimc, xc_code)
-
     if xctype == 'HF':
         return f1vo, f1oo, v1ao, k1ao
     elif xctype == 'LDA':
@@ -303,19 +311,16 @@ def _contract_xc_kernel(td_grad, xc_code, dmvo, dmoo=None, with_vxc=True, with_k
     else:
         raise NotImplementedError(f'td-uks for functional {xc_code}')
 
-    for ao, mask, weight, coords in ni.block_loop(mol, grids, nao, ao_deriv, max_memory):
-        if xctype == 'LDA':
-            ao0 = ao[0]
-        else:
-            ao0 = ao
-        rho = (
-            ni.eval_rho2(mol, ao0, mo_coeff[0], mo_occ[0], mask, xctype, with_lapl=False),
-            ni.eval_rho2(mol, ao0, mo_coeff[1], mo_occ[1], mask, xctype, with_lapl=False),
-        )
+    cache_mgr = get_cache_manager(td_grad)
+    need_sc = dmoo is not None or with_vxc
+    cached_blocks = cache_mgr.get_xc_blocks(td_grad, xc_code, ao_deriv, deriv, max_memory, need_sc=need_sc)
+
+    for block_id, (ao, mask, weight, coords) in enumerate(ni.block_loop(mol, grids, nao, ao_deriv, max_memory)):
+        ao0 = ao[0] if xctype == 'LDA' else ao
+        block = cached_blocks[block_id]
         if td_grad.base.collinear_samples > 0:
-            rho_z = np.array([rho[0] + rho[1], rho[0] - rho[1]])
-            fxc_sf, kxc_sf = eval_xc_eff(xc_code, rho_z, deriv, xctype=xctype)[2:4]
-            kxc_sf = np.stack((kxc_sf[:, :, 0] + kxc_sf[:, :, 1], kxc_sf[:, :, 0] - kxc_sf[:, :, 1]), axis=2)
+            fxc_sf = block['fxc_sf']
+            kxc_sf = block['kxc_sf']
             rho1 = ni.eval_rho(mol, ao0, dmvo, mask, xctype, hermi=1, with_lapl=False)
             if xctype == 'LDA':
                 rho1 = rho1[np.newaxis]
@@ -327,8 +332,9 @@ def _contract_xc_kernel(td_grad, xc_code, dmvo, dmoo=None, with_vxc=True, with_k
                 fmat_(mol, k1ao[0], ao, wv[0], mask, shls_slice, ao_loc)
                 fmat_(mol, k1ao[1], ao, wv[1], mask, shls_slice, ao_loc)
 
-        if dmoo is not None or with_vxc:
-            vxc, fxc, kxc = ni.eval_xc_eff(xc_code, rho, deriv=2, spin=1)[1:]
+        if need_sc:
+            vxc = block['vxc']
+            fxc = block['fxc']
 
         if dmoo is not None:
             rho2 = np.asarray(

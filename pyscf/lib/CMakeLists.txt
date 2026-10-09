@@ -1,5 +1,18 @@
-cmake_minimum_required (VERSION 3.5)
+cmake_minimum_required (VERSION 3.15)
 project (pyscf_forge)
+
+# Build only the GAS FCI kernel library.  This mode is intended for
+# reproducible local kernel builds and deliberately bypasses unrelated
+# dependencies such as BLAS, FFTW, and the other PySCF-forge extensions.
+option(
+  BUILD_GAS_FCI_ONLY
+  "Configure only the GAS FCI shared library"
+  OFF
+)
+
+option(ENABLE_OPENMP "Compiling C extensions with openmp" ON)
+
+if(NOT BUILD_GAS_FCI_ONLY)
 
 set(CMAKE_VERBOSE_MAKEFILE OFF)
 if (NOT CMAKE_BUILD_TYPE)
@@ -71,7 +84,6 @@ find_package(BLAS REQUIRED)
 #find_package (LAPACK REQUIRED)
 
 # OpenMP
-option(ENABLE_OPENMP "Compiling C extensions with openmp" ON)
 set(OPENMP_C_PROPERTIES "")
 if(ENABLE_OPENMP)
   find_package(OpenMP)
@@ -81,11 +93,22 @@ if(ENABLE_OPENMP)
   endif()
 endif()
 
-option(PYSCF_SOURCE_DIR "Pyscf source directory e.g. /usr/local/lib/python3.7/site-packages/pyscf")
+set(PYSCF_SOURCE_DIR "" CACHE PATH "Pyscf source directory e.g. /usr/local/lib/python3.7/site-packages/pyscf")
 if(NOT PYSCF_SOURCE_DIR)
+  # Locate the installed pyscf with the interpreter the build runs under (setup.py passes -DPython_EXECUTABLE),
+  # from the build directory: run from the checkout, an interpreter without pyscf would import the checkout's own
+  # namespace-package portion pyscf/ and answer with the wrong directory, silently.
+  find_package(Python COMPONENTS Interpreter REQUIRED)
   execute_process(
-    COMMAND python3 -c "import pyscf; print(pyscf.__path__[0], end='')"
-    OUTPUT_VARIABLE PYSCF_SOURCE_DIR)
+    COMMAND ${Python_EXECUTABLE} -c "import pyscf; print(pyscf.__path__[0], end='')"
+    WORKING_DIRECTORY ${CMAKE_CURRENT_BINARY_DIR}
+    OUTPUT_VARIABLE PYSCF_SOURCE_DIR
+    RESULT_VARIABLE _pyscf_rc)
+  if(NOT _pyscf_rc EQUAL 0 OR NOT EXISTS "${PYSCF_SOURCE_DIR}/lib/config.h.in")
+    message(FATAL_ERROR
+      "Could not locate an installed pyscf using ${Python_EXECUTABLE}. "
+      "Pass -DPYSCF_SOURCE_DIR=<.../site-packages/pyscf> or -DPython_EXECUTABLE=<interpreter with pyscf>.")
+  endif()
 endif()
 message(STATUS "Include pyscf source dir: ${PYSCF_SOURCE_DIR}")
 include_directories(${PYSCF_SOURCE_DIR}/lib ${PYSCF_SOURCE_DIR}/lib/deps/include)
@@ -198,5 +221,35 @@ set_target_properties (clib_csf PROPERTIES
     LIBRARY_OUTPUT_DIRECTORY ${PROJECT_SOURCE_DIR}
     OUTPUT_NAME "csf")
 
+# Build the SISOhelper shared library
+set (SISO_SOURCE_FILES "siso/sisohelper.c")
+add_library (clib_siso SHARED ${SISO_SOURCE_FILES})
+target_link_libraries (clib_siso ${OPENMP_C_PROPERTIES})
+set_target_properties (clib_siso PROPERTIES
+    LINKER_LANGUAGE C
+    CLEAN_DIRECT_OUTPUT 1
+    LIBRARY_OUTPUT_DIRECTORY ${PROJECT_SOURCE_DIR}
+    OUTPUT_NAME "siso")
+
 add_subdirectory(gbci)
 add_subdirectory(pwscf)
+
+else()
+
+  if(NOT ENABLE_OPENMP)
+    message(FATAL_ERROR
+        "BUILD_GAS_FCI_ONLY=ON requires ENABLE_OPENMP=ON"
+    )
+  endif()
+
+  find_package(OpenMP REQUIRED COMPONENTS C)
+
+  if(NOT TARGET OpenMP::OpenMP_C)
+    message(FATAL_ERROR
+        "OpenMP was reported as found, but OpenMP::OpenMP_C is unavailable"
+    )
+  endif()
+
+endif()
+
+add_subdirectory(mcscf)

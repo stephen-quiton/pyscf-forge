@@ -1,33 +1,14 @@
 # Repository Guidelines
 
 ## Project Structure & Module Organization
+This is a private version of the `pyscf-forge` repository.
 
-`fsec/` contains the installable Python package. Singularity-subtraction methods
-for exact exchange, MP2, and CCD are under `fsec/singularity_subtraction/`,
-with reusable model functions and structure-factor code in their nested
-packages. Periodic restricted CCD code is in `fsec/staggered_mesh/cc/`.
-Tests live beside the relevant implementation, primarily in `*/tests/`.
-`examples/` contains runnable PySCF workflows; Markdown files document methods
-and implementation decisions. `pyproject.toml` defines packaging, dependencies,
-and pytest configuration.
+For this local installation, the corresponding `pyscf` installation is located at:
+`/home/sjquiton/sjq_dev/pyscf-sjq`
 
 ## Build, Test, and Development Commands
 
-Use Python 3.9+ and install dependencies with:
-
-```bash
-python -m pip install -e .
-```
-
-Run the complete test suite with `python -m pytest`. Run a focused module test,
-for example `python -m pytest fsec/singularity_subtraction/tests/test_mp2ss.py`.
-The full periodic SCF/CCD reference tests are expensive; select them with
-`python -m pytest -m slow`. The archived k-CCD reference comparison additionally
-requires `FSEC_RUN_ARCHIVED_REFERENCE=1`.
-
-Furthermore, if there exists an `fsec-312` environment or something named similarly, use it.
-
-Finally, for anything that isn't changing just a few lines of code, or for plans that
+For anything that isn't changing just a few lines of code, or for plans that
 come out of Plan mode, you (the current model) will be an orchestrator that feeds the implementation
 details to Luna-MAX. Specifically, after planning, tell yourself the following prompt:
 
